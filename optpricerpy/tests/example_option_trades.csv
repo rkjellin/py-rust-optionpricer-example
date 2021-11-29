@@ -1,0 +1,4 @@
+ticker,size,strike,option_type,expiry
+AAPL,10,900,call,2022-08-22
+AAPL,20,850,put,2024-01-01
+AAPL,10,800,put,2025-01-01

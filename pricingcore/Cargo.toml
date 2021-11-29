@@ -1,0 +1,20 @@
+[package]
+name = "pricingcore"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rand = "0.8"
+statrs = "0.15"
+thiserror = "1.0"
+strum = "0.22"
+strum_macros = "0.22"
+chrono = "0.4"
+maplit = "1.0"
+ndarray = { version = "0.15", features = ["approx"] }
+approx = "0.4"
+atomic-counter = "1.0"
+rayon = "1.5"
+soa_derive = "0.10"

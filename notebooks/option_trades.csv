@@ -1,0 +1,7 @@
+ticker,size,strike,option_type,expiry
+AAPL,3000,160,call,2022-02-01
+AAPL,3500,130,put,2022-04-01
+MSFT,500,400,call,2023-01-01
+TSLA,400,1100,call,2022-01-22
+TSLA,300,1300,call,2023-01-01
+TSLA,600,800,put,2023-01-01
