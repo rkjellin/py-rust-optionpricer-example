@@ -13,7 +13,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use chrono::{Date, Datelike, TimeZone, Utc};
-use ndarray::{Array, ArrayD};
+use ndarray::ArrayD;
 use numpy::IntoPyArray;
 use numpy::PyArrayDyn;
 use pricingcore::lookupctx::LookupCtx;
