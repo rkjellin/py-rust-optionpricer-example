@@ -37,7 +37,9 @@ def test_pricing_engine_price():
     p.load_equity_trades(pd.read_csv(_example_equity_trades_path))
 
     pricing_engine = PricingEngine()
-    df = pricing_engine.price_portfolio([Measure.PRICE], date(2021, 12, 1), p, md)
+    df = pricing_engine.price_portfolio(
+        [Measure.PRICE], [date(2021, 12, 1), date(2021, 12, 2)], p, md
+    )
     assert_frame_equal(
         df,
         pd.read_csv(_expected_pricing_result).set_index(["trade_id", "measure"]),
@@ -57,7 +59,7 @@ def test_pricing_engine_portfolio_ladder():
     pricing_engine = PricingEngine()
     arr = pricing_engine.price_portfolio_ladder_scenario(
         [Measure.PRICE],
-        date(2021, 12, 1),
+        [date(2021, 12, 1), date(2021, 12, 2)],
         p,
         md,
         ScenarioShift(
@@ -83,7 +85,7 @@ def test_pricing_engine_portfolio_2d_scenario():
     pricing_engine = PricingEngine()
     arr = pricing_engine.price_portfolio_2d_matrix_scenario(
         [Measure.PRICE],
-        date(2021, 12, 1),
+        [date(2021, 12, 1), date(2021, 12, 2)],
         p,
         md,
         x_shift=ScenarioShift(
@@ -99,3 +101,4 @@ def test_pricing_engine_portfolio_2d_scenario():
             abs_shifts=[0.0, 0.0, 0.0],
         ),
     )
+    print(arr)

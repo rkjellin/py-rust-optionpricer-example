@@ -17,6 +17,7 @@ class ScalarPricingResultSchema(pan.SchemaModel):
     """Schema describing a scalar/non-scenario pricing result."""
 
     trade_id: pat.Index[str] = pan.Field(coerce=True, nullable=False)
+    valuation_date: pat.Index[pat.DateTime] = pan.Field(coerce=True, nullable=False)
     measure: pat.Index[str] = pan.Field(coerce=True, nullable=False)
     measure_value: pat.Series[float] = pan.Field(coerce=True, nullable=True)
 
@@ -29,6 +30,7 @@ class VectorPricingResultScheme(pan.SchemaModel):
     """Schema describing pricing result vectorized over 1 axis."""
 
     trade_id: pat.Series[str] = pan.Field(coerce=True, nullable=False)
+    valuation_date: pat.Series[pat.DateTime] = pan.Field(coerce=True, nullable=False)
     measure: pat.Series[str] = pan.Field(coerce=True, nullable=False)
     rel_shift: pat.Series[float] = pan.Field(coerce=True, nullable=True)
     abs_shift: pat.Series[float] = pan.Field(coerce=True, nullable=True)
@@ -179,7 +181,7 @@ class PricingEngine:
     def price_portfolio(
         self,
         measures: list[Measure],
-        valuation_date: date,
+        valuation_dates: list[date],
         portfolio: Portfolio,
         market_data: MarketData,
     ) -> pat.DataFrame[ScalarPricingResultSchema]:
@@ -189,28 +191,28 @@ class PricingEngine:
         """
         pa_df = self.core_pricing_engine.price(
             measures,
-            valuation_date,
+            valuation_dates,
             portfolio.core_portfolio,
             market_data.core_marketdata,
         )
-        return pa_df.to_pandas().set_index(["trade_id", "measure"])
+        return pa_df.to_pandas().set_index(["trade_id", "valuation_date", "measure"])
 
     @pan.check_types
     def price_portfolio_ladder_scenario(
         self,
         measures: list[Measure],
-        valuation_date: date,
+        valuation_dates: list[date],
         portfolio: Portfolio,
         market_data: MarketData,
         ladder_definition: ScenarioShift,
     ) -> pat.DataFrame[VectorPricingResultScheme]:
         """
         Issue a pricing request for a list of pricing measures per a
-        specific `valuation_date` shifted by the `ladder_definition`.
+        specific series of `valuation_dates` shifted by the `ladder_definition`.
         """
         pa_df = self.core_pricing_engine.price_ladder(
             measures,
-            valuation_date,
+            valuation_dates,
             portfolio.core_portfolio,
             market_data.core_marketdata,
             _scenario_shift_2_core(ladder_definition),
@@ -220,27 +222,28 @@ class PricingEngine:
     def price_portfolio_scenario(
         self,
         measures: list[Measure],
-        valuation_date: date,
+        valuation_dates: list[date],
         portfolio: Portfolio,
         market_data: MarketData,
         scenario_definition: ScenarioDefinition,
     ) -> xr.Dataset:
         """
         Issue a pricing request for a list of pricing measures per a
-        specific `valuation_date` shifted by the `scenario_definition`.
+        specific series of `valuation_dates` shifted by the `scenario_definition`.
 
-        The method returns an xarray dataset with a trade_id dimension and
-        1 additional dimension per axis in the scenario.
+        The method returns an xarray dataset with a valuation_date dimension,
+        trade_id dimension and 1 additional dimension per axis in the scenario.
         """
         position_ids = portfolio.position_ids()
         axes = scenario_definition.axes()
         axes.insert(0, "trade_id")
+        axes.insert(0, "valuation_date")
         arrs = {
             measure.value: (
                 axes,
                 self.core_pricing_engine.price_portfolio_scenario(
                     measure,
-                    valuation_date,
+                    valuation_dates,
                     portfolio.core_portfolio,
                     market_data.core_marketdata,
                     _scenario_def_2_core(scenario_definition),
@@ -250,13 +253,13 @@ class PricingEngine:
         }
         return xr.Dataset(
             arrs,
-            coords={"trade_id": position_ids},
+            coords={"valuation_date": valuation_dates, "trade_id": position_ids},
         )
 
     def price_portfolio_2d_matrix_scenario(
         self,
         measures: list[Measure],
-        valuation_date: date,
+        valuation_dates: list[date],
         portfolio: Portfolio,
         market_data: MarketData,
         *,
@@ -265,15 +268,15 @@ class PricingEngine:
     ) -> xr.Dataset:
         """
         Issue a pricing request for a list of pricing measures per a
-        specific `valuation_date` shifted in 2 dimensions, defined by
+        specific series of `valuation_dates`, shifted in 2 dimensions defined by
         `x_shift` and `y_shift` respectively.
 
-        The method returns an xarray dataset with a trade_id dimension and
-        2 additional scenario dimensions.
+        The method returns an xarray dataset with a valuation_date dimension,
+        trade_id dimension and 2 additional scenario dimensions.
         """
         scenario_def = ScenarioDefinition(
             shifts=[(x_shift, Alignment.ORTHOGONAL), (y_shift, Alignment.ORTHOGONAL)]
         )
         return self.price_portfolio_scenario(
-            measures, valuation_date, portfolio, market_data, scenario_def
+            measures, valuation_dates, portfolio, market_data, scenario_def
         )

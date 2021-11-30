@@ -1,4 +1,4 @@
-use arrow::array::TimestampNanosecondArray;
+use arrow::array::{Date64Array, TimestampNanosecondArray};
 use arrow::temporal_conversions::timestamp_ns_to_datetime;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use arrow::{
     error::ArrowError,
     record_batch::RecordBatch,
 };
-use chrono::{Date, Datelike, TimeZone, Utc};
+use chrono::{Date, Datelike, NaiveTime, TimeZone, Utc};
 use ndarray::ArrayD;
 use numpy::IntoPyArray;
 use numpy::PyArrayDyn;
@@ -245,55 +245,58 @@ impl PricingEngine {
         &self,
         py: Python<'a>,
         measure: &str,
-        valuation_date: &PyDate,
+        valuation_dates: Vec<&PyDate>,
         portfolio: &PyCell<Portfolio>,
         marketdata: &PyCell<MarketData>,
         scenario_def: &PyCell<ScenarioDefinition>,
     ) -> PyResult<&'a PyArrayDyn<f64>> {
         let m = Measure::from_str(measure).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        let vctx = make_vector_ctx(py, valuation_date, marketdata, scenario_def)?;
+        let mut date_results = vec![];
+        for vdt in valuation_dates.iter() {
+            let vctx = make_vector_ctx(py, vdt, marketdata, scenario_def)?;
 
-        let vecres: Vec<Result<ArrayD<_>, PyErr>> = portfolio
-            .borrow()
-            .portfolio
-            .positions_in_order()
-            .collect::<Vec<_>>()
-            .par_iter()
-            .try_fold(Vec::new, |mut v, (_, pos)| {
-                let res: Result<_, PyErr> = Ok(vctx
-                    .price_position(m, pos)
-                    .map(|vr| vr.arr)
-                    .map_err(CorePricerError::from)?);
-                v.push(res);
-                let vok: Result<_, PyErr> = Ok(v);
-                vok
-            })
-            .try_reduce(Vec::new, |mut x, y| {
-                x.extend(y);
-                Ok(x)
-            })?;
-        let resvec: Result<Vec<_>, PyErr> = vecres.into_iter().collect();
-        let res = resvec?;
-        let viewres: Vec<_> = res.iter().map(|arr| arr.view()).collect();
-        let concat_res = ndarray::stack(ndarray::Axis(0), &viewres)
+            let vecres: Vec<Result<ArrayD<_>, PyErr>> = portfolio
+                .borrow()
+                .portfolio
+                .positions_in_order()
+                .collect::<Vec<_>>()
+                .par_iter()
+                .try_fold(Vec::new, |mut v, (_, pos)| {
+                    let res: Result<_, PyErr> = Ok(vctx
+                        .price_position(m, pos)
+                        .map(|vr| vr.arr)
+                        .map_err(CorePricerError::from)?);
+                    v.push(res);
+                    let vok: Result<_, PyErr> = Ok(v);
+                    vok
+                })
+                .try_reduce(Vec::new, |mut x, y| {
+                    x.extend(y);
+                    Ok(x)
+                })?;
+            let resvec: Result<Vec<_>, PyErr> = vecres.into_iter().collect();
+            let res = resvec?;
+            let viewres: Vec<_> = res.iter().map(|arr| arr.view()).collect();
+            let concat_res = ndarray::stack(ndarray::Axis(0), &viewres)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            date_results.push(concat_res);
+        }
+
+        let date_viewres: Vec<_> = date_results.iter().map(|arr| arr.view()).collect();
+        let date_concat_res = ndarray::stack(ndarray::Axis(0), &date_viewres)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(concat_res.into_pyarray(py))
+        Ok(date_concat_res.into_pyarray(py))
     }
 
     pub fn price_ladder<'a>(
         &self,
         py: Python<'a>,
         measures: Vec<String>,
-        valuation_date: &PyDate,
+        valuation_dates: Vec<&PyDate>,
         portfolio: &PyCell<Portfolio>,
         marketdata: &PyCell<MarketData>,
         ladder_definition: &PyCell<ScenarioShift>,
     ) -> PyResult<RecordBatch> {
-        let vdt = Utc.ymd(
-            valuation_date.get_year(),
-            valuation_date.get_month() as u32,
-            valuation_date.get_day() as u32,
-        );
         let measure_vec_res: Result<Vec<Measure>, _> = measures
             .iter()
             .map(|m| Measure::parse_measure(m).map_err(CorePricerError::from))
@@ -301,54 +304,78 @@ impl PricingEngine {
         let measure_vec = measure_vec_res?;
         let md = marketdata.borrow();
 
-        let mobs = md
-            .observations
-            .get(&vdt)
-            .ok_or_else(|| PyRuntimeError::new_err(format!("No market data for {}", vdt)))?;
-        let pctx = LookupCtx::new_from_prices_and_vols(vdt, &mobs.market_prices, &mobs.vols);
-        let ladder_ref = ladder_definition.borrow();
-        let vctx = StackedVectorizedPricingCtx::shift_base_ctx(
-            &pctx,
-            TransformDefinition::new_vector_measure_transform(
-                ladder_ref.target_measure,
-                ladder_ref.filter_def.borrow(py).filter.clone(),
-                ladder_ref.abs_shifts.clone(),
-                ladder_ref.rel_shifts.clone(),
-            )
-            .map_err(CorePricerError::from)?,
-        );
         let mut trade_id_vec = vec![];
+        let mut valuation_dt_vec = vec![];
         let mut measure_out_vec = vec![];
         let mut measure_value_vec = vec![];
         let mut rel_shift_vec = vec![];
         let mut abs_shift_vec = vec![];
-        for (tid, pos) in portfolio.borrow().portfolio.positions_in_order() {
-            for m in measure_vec.iter() {
-                let x = vctx
-                    .price_position(*m, pos)
-                    .map_err(CorePricerError::from)?;
-                for (val, (rel_shift, abs_shift)) in x.arr.iter().zip(
-                    ladder_ref
-                        .rel_shifts
-                        .iter()
-                        .zip(ladder_ref.abs_shifts.iter()),
-                ) {
-                    trade_id_vec.push(tid.to_string());
-                    measure_out_vec.push(m.to_string());
-                    measure_value_vec.push(*val);
-                    rel_shift_vec.push(*rel_shift);
-                    abs_shift_vec.push(*abs_shift);
+        for pydt in valuation_dates.iter() {
+            let vdt = Utc.ymd(
+                pydt.get_year(),
+                pydt.get_month() as u32,
+                pydt.get_day() as u32,
+            );
+
+            let mobs = md
+                .observations
+                .get(&vdt)
+                .ok_or_else(|| PyRuntimeError::new_err(format!("No market data for {}", vdt)))?;
+            let pctx = LookupCtx::new_from_prices_and_vols(vdt, &mobs.market_prices, &mobs.vols);
+            let ladder_ref = ladder_definition.borrow();
+            let vctx = StackedVectorizedPricingCtx::shift_base_ctx(
+                &pctx,
+                TransformDefinition::new_vector_measure_transform(
+                    ladder_ref.target_measure,
+                    ladder_ref.filter_def.borrow(py).filter.clone(),
+                    ladder_ref.abs_shifts.clone(),
+                    ladder_ref.rel_shifts.clone(),
+                )
+                .map_err(CorePricerError::from)?,
+            );
+            for (tid, pos) in portfolio.borrow().portfolio.positions_in_order() {
+                for m in measure_vec.iter() {
+                    let x = vctx
+                        .price_position(*m, pos)
+                        .map_err(CorePricerError::from)?;
+                    for (val, (rel_shift, abs_shift)) in x.arr.iter().zip(
+                        ladder_ref
+                            .rel_shifts
+                            .iter()
+                            .zip(ladder_ref.abs_shifts.iter()),
+                    ) {
+                        trade_id_vec.push(tid.to_string());
+                        valuation_dt_vec.push(vdt);
+                        measure_out_vec.push(m.to_string());
+                        measure_value_vec.push(*val);
+                        rel_shift_vec.push(*rel_shift);
+                        abs_shift_vec.push(*abs_shift);
+                    }
                 }
             }
         }
 
         let trade_id_array = StringArray::from(trade_id_vec);
+
+        let val_dt_array = Date64Array::from(
+            valuation_dt_vec
+                .iter()
+                .map(|dt| {
+                    dt.and_time(NaiveTime::from_num_seconds_from_midnight(0, 0))
+                        .expect("failure to construct ts")
+                        .timestamp()
+                        * 1000
+                })
+                .collect::<Vec<i64>>(),
+        );
+
         let measure_array = StringArray::from(measure_out_vec);
         let measure_value_array = Float64Array::from(measure_value_vec);
         let rel_shift_array = Float64Array::from(rel_shift_vec);
         let abs_shift_array = Float64Array::from(abs_shift_vec);
         let schema = Schema::new(vec![
             Field::new("trade_id", DataType::Utf8, false),
+            Field::new("valuation_date", DataType::Date64, false),
             Field::new("measure", DataType::Utf8, false),
             Field::new("measure_value", DataType::Float64, false),
             Field::new("rel_shift", DataType::Float64, false),
@@ -359,6 +386,7 @@ impl PricingEngine {
             Arc::new(schema),
             vec![
                 Arc::new(trade_id_array),
+                Arc::new(val_dt_array),
                 Arc::new(measure_array),
                 Arc::new(measure_value_array),
                 Arc::new(rel_shift_array),
@@ -371,15 +399,10 @@ impl PricingEngine {
     pub fn price(
         &self,
         measures: Vec<String>,
-        valuation_date: &PyDate,
+        valuation_dates: Vec<&PyDate>,
         portfolio: &PyCell<Portfolio>,
         marketdata: &PyCell<MarketData>,
     ) -> PyResult<RecordBatch> {
-        let vdt = Utc.ymd(
-            valuation_date.get_year(),
-            valuation_date.get_month() as u32,
-            valuation_date.get_day() as u32,
-        );
         let measure_vec_res: Result<Vec<Measure>, _> = measures
             .iter()
             .map(|m| Measure::parse_measure(m).map_err(CorePricerError::from))
@@ -387,31 +410,55 @@ impl PricingEngine {
         let measure_vec = measure_vec_res?;
 
         let md = marketdata.borrow();
-        let mobs = md
-            .observations
-            .get(&vdt)
-            .ok_or_else(|| PyRuntimeError::new_err(format!("No market data for {}", vdt)))?;
-        let pctx = LookupCtx::new_from_prices_and_vols(vdt, &mobs.market_prices, &mobs.vols);
 
         let mut trade_id_vec = vec![];
+        let mut valuation_dt_vec = vec![];
         let mut measure_out_vec = vec![];
         let mut measure_value_vec = vec![];
-        for (tid, pos) in portfolio.borrow().portfolio.positions_in_order() {
-            for m in measure_vec.iter() {
-                let x = pctx
-                    .price_position(*m, pos)
-                    .map_err(CorePricerError::from)?;
-                trade_id_vec.push(tid.to_string());
-                measure_out_vec.push(m.to_string());
-                measure_value_vec.push(x);
+        for pydt in valuation_dates.iter() {
+            let vdt = Utc.ymd(
+                pydt.get_year(),
+                pydt.get_month() as u32,
+                pydt.get_day() as u32,
+            );
+            let mobs = md
+                .observations
+                .get(&vdt)
+                .ok_or_else(|| PyRuntimeError::new_err(format!("No market data for {}", vdt)))?;
+            let pctx = LookupCtx::new_from_prices_and_vols(vdt, &mobs.market_prices, &mobs.vols);
+
+            for (tid, pos) in portfolio.borrow().portfolio.positions_in_order() {
+                for m in measure_vec.iter() {
+                    let x = pctx
+                        .price_position(*m, pos)
+                        .map_err(CorePricerError::from)?;
+                    trade_id_vec.push(tid.to_string());
+                    valuation_dt_vec.push(vdt);
+                    measure_out_vec.push(m.to_string());
+                    measure_value_vec.push(x);
+                }
             }
         }
 
         let trade_id_array = StringArray::from(trade_id_vec);
+
+        let val_dt_array = Date64Array::from(
+            valuation_dt_vec
+                .iter()
+                .map(|dt| {
+                    dt.and_time(NaiveTime::from_num_seconds_from_midnight(0, 0))
+                        .expect("failure to construct ts")
+                        .timestamp()
+                        * 1000
+                })
+                .collect::<Vec<i64>>(),
+        );
+
         let measure_array = StringArray::from(measure_out_vec);
         let measure_value_array = Float64Array::from(measure_value_vec);
         let schema = Schema::new(vec![
             Field::new("trade_id", DataType::Utf8, false),
+            Field::new("valuation_date", DataType::Date64, false),
             Field::new("measure", DataType::Utf8, false),
             Field::new("measure_value", DataType::Float64, false),
         ]);
@@ -420,6 +467,7 @@ impl PricingEngine {
             Arc::new(schema),
             vec![
                 Arc::new(trade_id_array),
+                Arc::new(val_dt_array),
                 Arc::new(measure_array),
                 Arc::new(measure_value_array),
             ],
