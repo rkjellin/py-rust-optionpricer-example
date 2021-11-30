@@ -38,9 +38,16 @@ class VectorPricingResultScheme(pan.SchemaModel):
 class MarketDataSchema(pan.SchemaModel):
     """Schema describing data format for loading market data from python."""
 
-    ticker: pat.Series[str] = pan.Field(coerce=True, nullable=False, unique=True)
+    ticker: pat.Index[str] = pan.Field(check_name=True, coerce=True, nullable=False)
+    date: pat.Index[pat.DateTime] = pan.Field(
+        check_name=True, coerce=True, nullable=False
+    )
     spot: pat.Series[float] = pan.Field(coerce=True, nullable=False)
     vol: pat.Series[float] = pan.Field(coerce=True, nullable=False)
+
+    class Config:
+        multiindex_strict = True
+        multiindex_coerce = True
 
 
 class MarketData:

@@ -1,2 +1,2 @@
-ticker,spot,vol
-AAPL,900,0.2
+ticker,date,spot,vol
+AAPL,2021-12-01,900,0.2

@@ -22,13 +22,13 @@ _expected_pricing_result = Path(__file__).parent / "expected_pricing_result.csv"
 
 
 def test_load_marketdata():
-    df = pd.read_csv(_market_data_path)
+    df = pd.read_csv(_market_data_path).set_index(["ticker", "date"])
     md = MarketData()
     md.load_market_data(df)
 
 
 def test_pricing_engine_price():
-    df = pd.read_csv(_market_data_path)
+    df = pd.read_csv(_market_data_path).set_index(["ticker", "date"])
     md = MarketData()
     md.load_market_data(df)
 
@@ -46,7 +46,7 @@ def test_pricing_engine_price():
 
 
 def test_pricing_engine_portfolio_ladder():
-    df = pd.read_csv(_market_data_path)
+    df = pd.read_csv(_market_data_path).set_index(["ticker", "date"])
     md = MarketData()
     md.load_market_data(df)
 
@@ -72,7 +72,7 @@ def test_pricing_engine_portfolio_ladder():
 
 
 def test_pricing_engine_portfolio_2d_scenario():
-    df = pd.read_csv(_market_data_path)
+    df = pd.read_csv(_market_data_path).set_index(["ticker", "date"])
     md = MarketData()
     md.load_market_data(df)
 
