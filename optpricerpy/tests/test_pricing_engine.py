@@ -11,6 +11,7 @@ from optpricerpy.pricing_engine import (
     Measure,
     PricingEngine,
     RiskFactorFilter,
+    ScalarPricingResultSchema,
     ScenarioDefinition,
     ScenarioShift,
 )
@@ -40,9 +41,14 @@ def test_pricing_engine_price():
     df = pricing_engine.price_portfolio(
         [Measure.PRICE], [date(2021, 12, 1), date(2021, 12, 2)], p, md
     )
+    expected_df = ScalarPricingResultSchema.validate(
+        pd.read_csv(_expected_pricing_result).set_index(
+            ["trade_id", "valuation_date", "measure"]
+        )
+    )
     assert_frame_equal(
         df,
-        pd.read_csv(_expected_pricing_result).set_index(["trade_id", "measure"]),
+        expected_df,
         check_like=True,
     )
 

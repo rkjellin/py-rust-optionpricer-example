@@ -187,7 +187,7 @@ class PricingEngine:
     ) -> pat.DataFrame[ScalarPricingResultSchema]:
         """
         Issue a pricing request for a list of regular pricing measures per a
-        specific `valuation_date`.
+        specific series of `valuation_dates`.
         """
         pa_df = self.core_pricing_engine.price(
             measures,
