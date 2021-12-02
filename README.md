@@ -196,3 +196,4 @@ development of both the python and the rust parts.
 
 ## Usage guide ##
 TODO
+(In the meantime look at the example in the [notebooks](notebooks/))
